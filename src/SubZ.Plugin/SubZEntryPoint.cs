@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller.Entities;
@@ -51,8 +53,11 @@ public sealed class SubZEntryPoint : IServerEntryPoint
         var options = plugin.CurrentOptions;
         if (!options.Enabled || options.ManualTargetOnlyMode) return;
 
-        // 仅处理影片和剧集；Season 通过 Episode 的 Series 路径间接覆盖
+        // Only process Movies and Episodes; Season is indirectly covered via Episode's Series path
         if (e.Item is not Movie && e.Item is not Episode) return;
+
+        // Check if the item is within the selected libraries
+        if (!IsLibrarySelected(e.Item, options)) return;
 
         var folderPath = ResolveFolderPath(e.Item);
         if (string.IsNullOrWhiteSpace(folderPath)) return;
@@ -79,6 +84,62 @@ public sealed class SubZEntryPoint : IServerEntryPoint
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
+    }
+
+    // Checks whether the item belongs to a user-selected library.
+    // If SelectedLibraryIds is empty, all libraries are considered selected.
+    private bool IsLibrarySelected(BaseItem item, PluginOptions options)
+    {
+        var selectedIds = options.SelectedLibraryIds;
+        if (string.IsNullOrWhiteSpace(selectedIds))
+        {
+            // No libraries selected => default to processing all libraries
+            return true;
+        }
+
+        var selectedSet = new HashSet<string>(
+            selectedIds.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => s.Trim()),
+            StringComparer.OrdinalIgnoreCase);
+
+        if (selectedSet.Count == 0)
+        {
+            return true;
+        }
+
+        try
+        {
+            var itemPath = item.ContainingFolderPath;
+            if (string.IsNullOrWhiteSpace(itemPath))
+            {
+                return false;
+            }
+
+            var virtualFolders = _libraryManager.GetVirtualFolders();
+            foreach (var folder in virtualFolders)
+            {
+                var folderId = folder.ItemId ?? folder.Id;
+                if (string.IsNullOrWhiteSpace(folderId)) continue;
+
+                if (!selectedSet.Contains(folderId)) continue;
+
+                // Match the library's physical location paths
+                if (folder.Locations != null &&
+                    folder.Locations.Any(loc => !string.IsNullOrWhiteSpace(loc) &&
+                        itemPath.StartsWith(loc, StringComparison.OrdinalIgnoreCase)))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Plugin.LogErrorException("Failed to check library selection for item.", ex);
+            // Fail open on error to avoid blocking the normal library ingestion flow
+            return true;
+        }
+
+        return false;
     }
 
     private static string? ResolveFolderPath(BaseItem item)

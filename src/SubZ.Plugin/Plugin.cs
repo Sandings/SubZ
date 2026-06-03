@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Threading.Tasks;
+using Emby.Web.GenericEdit.Common;
 using MediaBrowser.Common;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Controller.Library;
@@ -23,12 +25,14 @@ public sealed class Plugin : BasePluginSimpleUI<PluginOptions>, IHasThumbImage, 
     public static ILibraryMonitor? LibraryMonitor { get; private set; }
     private static ILogger? _logger;
     private readonly IFfmpegToolPathProvider _ffmpegToolPathProvider;
+    private readonly ILibraryManager? _libraryManager;
 
-    public Plugin(IApplicationHost applicationHost)
+    public Plugin(IApplicationHost applicationHost, ILibraryManager libraryManager)
         : base(applicationHost)
     {
         Instance = this;
         _ffmpegToolPathProvider = new ApplicationHostFfmpegToolPathProvider(applicationHost);
+        _libraryManager = libraryManager;
         TryInitLogger(applicationHost);
         TryInitLibraryMonitor(applicationHost);
         var options = CurrentOptions;
@@ -186,7 +190,39 @@ public sealed class Plugin : BasePluginSimpleUI<PluginOptions>, IHasThumbImage, 
                 : options.BatchSize;
         }
 
+        // Populate library multi-select list
+        PopulateLibrarySelectItems(options);
+
         return options;
+    }
+
+    private void PopulateLibrarySelectItems(PluginOptions options)
+    {
+        try
+        {
+            if (_libraryManager == null)
+            {
+                LogWarn("ILibraryManager not available, cannot populate library list.");
+                return;
+            }
+
+            var virtualFolders = _libraryManager.GetVirtualFolders();
+            var items = virtualFolders
+                .Where(f => !string.IsNullOrWhiteSpace(f.Name) && !string.IsNullOrWhiteSpace(f.ItemId))
+                .Select(f => new EditorSelectOption
+                {
+                    Name = f.Name,
+                    Value = f.ItemId
+                })
+                .OrderBy(o => o.Name)
+                .ToList();
+
+            options.LibrarySelectItemsList = items;
+        }
+        catch (Exception ex)
+        {
+            LogErrorException("Failed to populate library select items.", ex);
+        }
     }
 
     protected override bool OnOptionsSaving(PluginOptions options)
