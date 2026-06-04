@@ -46,7 +46,8 @@ public sealed class InMemoryTranslationJobDispatcher : ITranslationJobDispatcher
 
     private readonly ConcurrentQueue<string> _queue = new ConcurrentQueue<string>();
     private readonly ConcurrentDictionary<string, TranslationTaskStatus> _status = new ConcurrentDictionary<string, TranslationTaskStatus>(StringComparer.OrdinalIgnoreCase);
-    private readonly Func<string, CancellationToken, Task> _handler;
+    private readonly Func<string, CancellationToken, Task<TranslationTargetResult>> _handler;
+    private readonly ITranslationStatusStore _statusStore;
     private readonly object _gate = new object();
     private bool _workerRunning;
     private bool _isPaused;
@@ -54,9 +55,11 @@ public sealed class InMemoryTranslationJobDispatcher : ITranslationJobDispatcher
     private Task? _workerTask;
 
 
-    public InMemoryTranslationJobDispatcher(Func<string, CancellationToken, Task> handler)
+    public InMemoryTranslationJobDispatcher(Func<string, CancellationToken, Task<TranslationTargetResult>> handler, ITranslationStatusStore? statusStore = null)
     {
         _handler = handler;
+        _statusStore = statusStore ?? new FileTranslationStatusStore();
+        RestoreStatuses();
     }
 
     public Task EnqueueAsync(IEnumerable<string> targets, CancellationToken cancellationToken)
@@ -78,6 +81,7 @@ public sealed class InMemoryTranslationJobDispatcher : ITranslationJobDispatcher
             AppendRuntimeLog("Info", UiText.QueuedTarget(normalized));
         }
 
+        PersistStatuses();
         EnsureWorker();
         return Task.CompletedTask;
     }
@@ -188,8 +192,55 @@ public sealed class InMemoryTranslationJobDispatcher : ITranslationJobDispatcher
             queuedStatus.UpdatedAt = DateTimeOffset.UtcNow;
         }
 
+        PersistStatuses();
         cts?.Cancel();
         AppendRuntimeLog("Warn", UiText.DispatcherStopRequested());
+    }
+
+    private void RestoreStatuses()
+    {
+        try
+        {
+            foreach (var restored in _statusStore.Load())
+            {
+                if (string.IsNullOrWhiteSpace(restored.Target))
+                {
+                    continue;
+                }
+
+                var state = restored.State;
+                var message = restored.Message ?? string.Empty;
+                if (state == TranslationTaskState.Queued || state == TranslationTaskState.Running)
+                {
+                    state = TranslationTaskState.Stopped;
+                    message = "Restored from previous session.";
+                }
+
+                _status[restored.Target] = new TranslationTaskStatus
+                {
+                    Target = restored.Target,
+                    State = state,
+                    Message = message,
+                    UpdatedAt = restored.UpdatedAt
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            AppendRuntimeLog("Warn", $"Failed to restore task statuses: {ex.Message}");
+        }
+    }
+
+    private void PersistStatuses()
+    {
+        try
+        {
+            _statusStore.Save(SnapshotStatuses());
+        }
+        catch (Exception ex)
+        {
+            AppendRuntimeLog("Warn", $"Failed to persist task statuses: {ex.Message}");
+        }
     }
 
     private void EnsureWorker()
@@ -217,10 +268,6 @@ public sealed class InMemoryTranslationJobDispatcher : ITranslationJobDispatcher
                 var baseException = t.Exception?.GetBaseException() ?? t.Exception;
                 var message = baseException?.Message ?? "Unknown worker failure.";
                 AppendRuntimeLog("Error", $"Dispatcher worker crashed: {message}");
-                if (baseException != null)
-                {
-                    global::SubZ.Plugin.Plugin.LogErrorException("Dispatcher worker crashed.", baseException);
-                }
             },
             CancellationToken.None,
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
@@ -252,14 +299,24 @@ public sealed class InMemoryTranslationJobDispatcher : ITranslationJobDispatcher
                 status.State = TranslationTaskState.Running;
                 status.Message = UiText.Running();
                 status.UpdatedAt = DateTimeOffset.UtcNow;
+                PersistStatuses();
                 AppendRuntimeLog("Info", UiText.RunningTarget(target));
 
                 try
                 {
-                    await _handler(target, cts.Token).ConfigureAwait(false);
+                    var result = await _handler(target, cts.Token).ConfigureAwait(false);
+                    if (result.SkippedAll)
+                    {
+                        _status.TryRemove(target, out _);
+                        PersistStatuses();
+                        AppendRuntimeLog("Info", $"Removed skipped target from task status: {target}");
+                        continue;
+                    }
+
                     status.State = TranslationTaskState.Succeeded;
                     status.Message = UiText.Completed();
                     status.UpdatedAt = DateTimeOffset.UtcNow;
+                    PersistStatuses();
                     AppendRuntimeLog("Info", UiText.CompletedTarget(target));
                 }
                 catch (OperationCanceledException)
@@ -270,6 +327,7 @@ public sealed class InMemoryTranslationJobDispatcher : ITranslationJobDispatcher
                         status.State = TranslationTaskState.Queued;
                         status.Message = UiText.Paused();
                         status.UpdatedAt = DateTimeOffset.UtcNow;
+                        PersistStatuses();
                         AppendRuntimeLog("Warn", UiText.PausedAndRequeuedTarget(target));
                     }
                     else
@@ -277,6 +335,7 @@ public sealed class InMemoryTranslationJobDispatcher : ITranslationJobDispatcher
                         status.State = TranslationTaskState.Stopped;
                         status.Message = UiText.StoppedByUser();
                         status.UpdatedAt = DateTimeOffset.UtcNow;
+                        PersistStatuses();
                         AppendRuntimeLog("Warn", UiText.StoppedTarget(target));
                     }
 
@@ -287,6 +346,7 @@ public sealed class InMemoryTranslationJobDispatcher : ITranslationJobDispatcher
                     status.State = TranslationTaskState.Failed;
                     status.Message = ex.Message;
                     status.UpdatedAt = DateTimeOffset.UtcNow;
+                    PersistStatuses();
                     AppendRuntimeLog("Error", UiText.FailedTarget(target, ex.Message));
                 }
             }

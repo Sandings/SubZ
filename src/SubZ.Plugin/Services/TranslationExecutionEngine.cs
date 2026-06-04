@@ -14,7 +14,7 @@ public sealed class TranslationExecutionEngine
     private readonly SubtitleTagProtector _protector = new SubtitleTagProtector();
     private readonly ISubtitleTranslationClient _client = new OpenAICompatibleTranslationClient();
 
-    public async Task ProcessTargetAsync(string target, PluginOptions options, CancellationToken cancellationToken)
+    public async Task<TranslationTargetResult> ProcessTargetAsync(string target, PluginOptions options, CancellationToken cancellationToken)
     {
         var files = VideoFileResolver.ResolveVideoFiles(target).ToList();
         if (files.Count == 0)
@@ -23,16 +23,21 @@ public sealed class TranslationExecutionEngine
         }
 
         var scanDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var skipped = 0;
         foreach (var videoFile in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            await ProcessVideoAsync(videoFile, options, cancellationToken, scanDirs).ConfigureAwait(false);
+            if (await ProcessVideoAsync(videoFile, options, cancellationToken, scanDirs).ConfigureAwait(false))
+            {
+                skipped++;
+            }
         }
 
         FlushRescanNotifications(scanDirs);
+        return skipped == files.Count ? TranslationTargetResult.Skipped : TranslationTargetResult.Completed;
     }
 
-    private async Task ProcessVideoAsync(string videoFile, PluginOptions options, CancellationToken cancellationToken, HashSet<string> scanDirs)
+    private async Task<bool> ProcessVideoAsync(string videoFile, PluginOptions options, CancellationToken cancellationToken, HashSet<string> scanDirs)
     {
         var targetCode = options.GetTargetLanguageCode();
         var debugEnabled = options.EnableDebugLog;
@@ -41,13 +46,13 @@ public sealed class TranslationExecutionEngine
         if (VideoFileResolver.HasTargetSubtitle(videoFile, targetCode))
         {
             InMemoryTranslationJobDispatcher.AppendRuntimeLog("Info", $"Skip existing target subtitle: {videoFile} -> {targetCode}");
-            return;
+            return true;
         }
 
         if (SubtitleSourceResolver.HasEmbeddedTargetSubtitle(videoFile, options, debugEnabled))
         {
             InMemoryTranslationJobDispatcher.AppendRuntimeLog("Info", $"Skip existing embedded target subtitle: {videoFile} -> {targetCode}");
-            return;
+            return true;
         }
 
         var source = SubtitleSourceResolver.Resolve(videoFile, options, debugEnabled);
@@ -114,6 +119,8 @@ public sealed class TranslationExecutionEngine
             InMemoryTranslationJobDispatcher.AppendRuntimeLog(
                 "Info",
                 $"Token usage | File={videoFile} | Prompt={translated.PromptTokens}, Completion={translated.CompletionTokens}, Total={translated.TotalTokens}, Cues={cues.Count}");
+
+            return false;
         }
         finally
         {

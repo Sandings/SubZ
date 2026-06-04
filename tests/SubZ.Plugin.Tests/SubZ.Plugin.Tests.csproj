@@ -23,6 +23,8 @@
 
   <ItemGroup>
     <None Include="..\..\src\SubZ.Plugin\Plugin.cs" Link="Plugin.cs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\src\SubZ.Plugin\UI\StatusDashboard.js" Link="StatusDashboard.js" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\scripts\deploy-unraid.ps1" Link="deploy-unraid.ps1" CopyToOutputDirectory="PreserveNewest" />
     <Compile Include="..\..\src\SubZ.Plugin\Configuration\LanguageCodeMap.cs" Link="LanguageCodeMap.cs" />
     <Compile Include="..\..\src\SubZ.Plugin\Configuration\OutputFormatOption.cs" Link="OutputFormatOption.cs" />
     <Compile Include="..\..\src\SubZ.Plugin\Configuration\PluginOptions.cs" Link="PluginOptions.cs" />
@@ -30,8 +32,15 @@
     <Compile Include="..\..\src\SubZ.Plugin\Configuration\SupportedLanguageOption.cs" Link="SupportedLanguageOption.cs" />
     <Compile Include="..\..\src\SubZ.Plugin\Configuration\TranslationApiProfile.cs" Link="TranslationApiProfile.cs" />
     <Compile Include="..\..\src\SubZ.Plugin\Services\FfmpegToolPathResolver.cs" Link="FfmpegToolPathResolver.cs" />
+    <Compile Include="..\..\src\SubZ.Plugin\Services\FileRuntimeLogger.cs" Link="FileRuntimeLogger.cs" />
+    <Compile Include="..\..\src\SubZ.Plugin\Services\ITranslationJobDispatcher.cs" Link="ITranslationJobDispatcher.cs" />
+    <Compile Include="..\..\src\SubZ.Plugin\Services\InMemoryTranslationJobDispatcher.cs" Link="InMemoryTranslationJobDispatcher.cs" />
     <Compile Include="..\..\src\SubZ.Plugin\Services\SubtitleTrackSelector.cs" Link="SubtitleTrackSelector.cs" />
     <Compile Include="..\..\src\SubZ.Plugin\Services\TokenUsageLogParser.cs" Link="TokenUsageLogParser.cs" />
+    <Compile Include="..\..\src\SubZ.Plugin\Services\TranslationStatusStore.cs" Link="TranslationStatusStore.cs" />
+    <Compile Include="..\..\src\SubZ.Plugin\Services\TranslationStatusLogParser.cs" Link="TranslationStatusLogParser.cs" />
+    <Compile Include="..\..\src\SubZ.Plugin\Services\TranslationTargetResult.cs" Link="TranslationTargetResult.cs" />
+    <Compile Include="..\..\src\SubZ.Plugin\Services\UiText.cs" Link="UiText.cs" />
   </ItemGroup>
 
 </Project>

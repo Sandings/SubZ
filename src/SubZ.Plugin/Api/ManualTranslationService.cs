@@ -260,7 +260,7 @@ public sealed class ManualTranslationService : BaseApiService
         }
     }
 
-    private static Task HandleTargetAsync(string target, CancellationToken cancellationToken)
+    private static Task<TranslationTargetResult> HandleTargetAsync(string target, CancellationToken cancellationToken)
     {
         var plugin = Plugin.Instance;
         if (plugin is null)

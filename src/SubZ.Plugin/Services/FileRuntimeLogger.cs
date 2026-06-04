@@ -141,6 +141,53 @@ public static class FileRuntimeLogger
         }
     }
 
+    public static IReadOnlyList<string> ReadLinesSince(DateTimeOffset cutoffUtc)
+    {
+        lock (SyncRoot)
+        {
+            EnsureConfigured();
+
+            var lines = new List<string>();
+            var files = GetReadableLogFiles()
+                .OrderBy(static f => f, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            foreach (var file in files)
+            {
+                using (var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                {
+                    while (!reader.EndOfStream)
+                    {
+                        var line = reader.ReadLine();
+                        if (line == null)
+                        {
+                            continue;
+                        }
+
+                        var firstSpace = line.IndexOf(' ');
+                        if (firstSpace <= 0)
+                        {
+                            continue;
+                        }
+
+                        if (DateTimeOffset.TryParse(
+                                line.Substring(0, firstSpace),
+                                CultureInfo.InvariantCulture,
+                                DateTimeStyles.AssumeUniversal,
+                                out var timestamp)
+                            && timestamp.ToUniversalTime() >= cutoffUtc.ToUniversalTime())
+                        {
+                            lines.Add(line);
+                        }
+                    }
+                }
+            }
+
+            return lines;
+        }
+    }
+
     public static string GetLogDirectory()
     {
         lock (SyncRoot)

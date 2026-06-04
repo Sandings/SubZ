@@ -10,7 +10,7 @@ Cutoff time: 2026-05-07 21:38 (Asia/Shanghai)
 | --- | --- |
 | Project path | `D:\Projects\SubZ` |
 | Target platform | Emby (Unraid Docker) |
-| Remote deployment endpoint | `sanding.life:55522` |
+| Remote deployment endpoint | Unraid connection configured in the local `deploy_info.md` file |
 | Plugin deployment path | `/mnt/user/DockerFile/emby/plugins/SubZ.Plugin.dll` |
 | Default status page URL | `http://localhost:18123/subz-status.html` |
 | Primary model provider | DeepSeek-compatible LLM API |

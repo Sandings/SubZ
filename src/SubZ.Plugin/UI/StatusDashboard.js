@@ -5,6 +5,9 @@ define(['emby-button'], function () {
     var refreshIntervalMs = 3000;
     var tokenDaysFilter = 0;
     var tokenRecordLimit = 200;
+    var taskPageSize = 10;
+    var taskPageIndex = 0;
+    var lastStatusData = null;
     var lang = 'en';
 
     var i18n = {
@@ -39,7 +42,10 @@ define(['emby-button'], function () {
             confirmStop: 'Stop current task and clear queue?',
             loading: 'Loading SubZ status...',
             loadFailed: 'Failed to load SubZ status. Check Emby server logs or browser console.',
-            loadFailedWithError: 'Failed to load SubZ status: '
+            loadFailedWithError: 'Failed to load SubZ status: ',
+            previous: 'Previous',
+            next: 'Next',
+            pageStatus: 'Page {0} / {1}'
         },
         zh: {
             refresh: '\u5237\u65b0',
@@ -72,7 +78,10 @@ define(['emby-button'], function () {
             confirmStop: '\u505c\u6b62\u5f53\u524d\u4efb\u52a1\u5e76\u6e05\u7a7a\u961f\u5217\uff1f',
             loading: '\u6b63\u5728\u52a0\u8f7d SubZ \u72b6\u6001...',
             loadFailed: '\u52a0\u8f7d SubZ \u72b6\u6001\u5931\u8d25\u3002\u8bf7\u68c0\u67e5 Emby \u670d\u52a1\u65e5\u5fd7\u6216\u6d4f\u89c8\u5668\u63a7\u5236\u53f0\u3002',
-            loadFailedWithError: '\u52a0\u8f7d SubZ \u72b6\u6001\u5931\u8d25\uff1a'
+            loadFailedWithError: '\u52a0\u8f7d SubZ \u72b6\u6001\u5931\u8d25\uff1a',
+            previous: '\u4e0a\u4e00\u9875',
+            next: '\u4e0b\u4e00\u9875',
+            pageStatus: '\u7b2c {0} / {1} \u9875'
         }
     };
 
@@ -122,6 +131,7 @@ define(['emby-button'], function () {
         el = view.querySelector('#resumeBtn'); if (el) el.textContent = t('resume');
         el = view.querySelector('#stopBtn'); if (el) el.textContent = t('stop');
         el = view.querySelector('#languageLabel'); if (el) el.textContent = t('language');
+        el = view.querySelector('#taskStatusTitle'); if (el) el.textContent = t('taskStatus');
         el = view.querySelector('#tokenUsageTitle'); if (el) el.textContent = t('tokenUsage');
         el = view.querySelector('#rangeLabel'); if (el) el.textContent = t('range');
         el = view.querySelector('.sectionTitle'); // keep existing order, set by ids where possible.
@@ -138,9 +148,9 @@ define(['emby-button'], function () {
 
         var titles = view.querySelectorAll('h2.sectionTitle');
         if (titles && titles.length >= 3) {
-            titles[0].textContent = t('taskStatus');
-            titles[1].textContent = t('tokenUsage');
-            titles[2].textContent = t('recentLogs');
+            if (!view.querySelector('#taskStatusTitle')) titles[0].textContent = t('taskStatus');
+            if (!view.querySelector('#tokenUsageTitle')) titles[1].textContent = t('tokenUsage');
+            titles[titles.length - 1].textContent = t('recentLogs');
         }
 
         var uiLang = view.querySelector('#uiLanguage');
@@ -184,6 +194,7 @@ define(['emby-button'], function () {
             '.sz-item{padding:.8em 1em;border-top:1px solid var(--cardBorderColor,#eee)}',
             '.sz-item:first-child{border-top:0}',
             '.sz-target{font-weight:600;word-break:break-all}',
+            '.sz-title-time{display:inline-block;margin-left:.7em;font-size:.88em;font-weight:400;opacity:.62;white-space:nowrap}',
             '.sz-meta{opacity:.65;margin-top:.3em;font-size:.88em}',
             '.sz-log{padding:1em;font-family:monospace;font-size:.85em;white-space:pre-wrap;overflow-x:hidden;max-height:36em;overflow-y:auto}',
             '.sz-log-line{padding:.3em 0;border-bottom:1px solid var(--cardBorderColor,#f1f1f1);word-break:break-all}',
@@ -192,7 +203,11 @@ define(['emby-button'], function () {
             '.sz-token-row{display:grid;grid-template-columns:1.4fr 2.6fr .8fr .9fr .8fr .7fr;gap:.6em;padding:.55em 1em;border-top:1px solid var(--cardBorderColor,#f1f1f1);font-family:monospace;font-size:.82em}',
             '.sz-token-head{font-weight:700;opacity:.75;background:var(--theme-background-level1,rgba(0,0,0,.02));}',
             '.sz-token-cell{text-align:right}',
-            '.sz-token-time{text-align:left;font-family:inherit;word-break:break-all}'
+            '.sz-token-time{text-align:left;font-family:inherit;word-break:break-all}',
+            '.sz-task-pager{display:flex;align-items:center;justify-content:flex-end;gap:.45em;min-height:2.4em}',
+            '.sz-page-info{font-size:.88em;opacity:.7;white-space:nowrap}',
+            '.sz-pager-btn{min-width:5.6em;padding:.45em .7em;border:1px solid var(--cardBorderColor,#d1d5db);border-radius:6px;background:var(--cardBackground,#fff);color:inherit;cursor:pointer}',
+            '.sz-pager-btn:disabled{opacity:.38;cursor:default}'
         ].join('');
         document.head.appendChild(s);
     }
@@ -211,7 +226,31 @@ define(['emby-button'], function () {
         el.textContent = message;
     }
 
+    function formatText(template) {
+        var value = String(template || '');
+        for (var i = 1; i < arguments.length; i++) {
+            value = value.replace('{' + (i - 1) + '}', String(arguments[i]));
+        }
+        return value;
+    }
+
+    function drawTaskPager(view, totalItems, totalPages) {
+        var pager = view.querySelector('#taskPager');
+        if (!pager) return;
+
+        if (totalItems <= taskPageSize) {
+            pager.innerHTML = '';
+            return;
+        }
+
+        pager.innerHTML = ''
+            + '<button id="taskPrevBtn" class="sz-pager-btn" type="button"' + (taskPageIndex <= 0 ? ' disabled' : '') + '>' + esc(t('previous')) + '</button>'
+            + '<span class="sz-page-info">' + esc(formatText(t('pageStatus'), taskPageIndex + 1, totalPages)) + '</span>'
+            + '<button id="taskNextBtn" class="sz-pager-btn" type="button"' + (taskPageIndex >= totalPages - 1 ? ' disabled' : '') + '>' + esc(t('next')) + '</button>';
+    }
+
     function draw(view, data) {
+        lastStatusData = data;
         var statusEl = view.querySelector('#statusList');
         var logEl = view.querySelector('#logList');
         var tokenUsageEl = view.querySelector('#tokenUsagePanel');
@@ -227,21 +266,44 @@ define(['emby-button'], function () {
 
         if (items.length === 0) {
             statusEl.innerHTML = '<div class="sz-empty">' + esc(t('noTasks')) + '</div>';
+            drawTaskPager(view, 0, 1);
         } else {
             var sh = '';
-            for (var i = 0; i < items.length; i++) {
-                var it = items[i] || {};
+            var totalPages = Math.max(1, Math.ceil(items.length / taskPageSize));
+            if (taskPageIndex >= totalPages) taskPageIndex = totalPages - 1;
+            if (taskPageIndex < 0) taskPageIndex = 0;
+            var start = taskPageIndex * taskPageSize;
+            var pageItems = items.slice(start, start + taskPageSize);
+
+            for (var i = 0; i < pageItems.length; i++) {
+                var it = pageItems[i] || {};
                 var st = String(it.State || '');
-                if (st === 'Running') running++;
-                if (st === 'Succeeded') succeeded++;
-                if (st === 'Failed') failed++;
+                var timeHtml = '<div class="sz-meta">' + esc(fmtTime(it.UpdatedAt)) + '</div>';
+                var titleTimeHtml = (st === 'Succeeded' || st === 'Failed')
+                    ? '<span class="sz-title-time">' + esc(fmtTime(it.UpdatedAt)) + '</span>'
+                    : '';
+                var messageHtml = '<div class="sz-meta">' + esc(it.Message || '') + '</div>';
+
                 sh += '<div class="sz-item">'
-                    + '<div class="sz-target"><span class="' + badgeCls(st) + '">' + esc(stateLbl(st)) + '</span>' + esc(it.Target || '') + '</div>'
-                    + '<div class="sz-meta">' + esc(it.Message || '') + '</div>'
-                    + '<div class="sz-meta">' + esc(fmtTime(it.UpdatedAt)) + '</div>'
-                    + '</div>';
+                    + '<div class="sz-target"><span class="' + badgeCls(st) + '">' + esc(stateLbl(st)) + '</span>' + esc(it.Target || '') + titleTimeHtml + '</div>';
+
+                if (st === 'Failed') {
+                    sh += messageHtml;
+                } else if (st !== 'Succeeded') {
+                    sh += messageHtml + timeHtml;
+                }
+
+                sh += '</div>';
             }
             statusEl.innerHTML = sh;
+            drawTaskPager(view, items.length, totalPages);
+        }
+
+        for (var c = 0; c < items.length; c++) {
+            var cs = String((items[c] || {}).State || '');
+            if (cs === 'Running') running++;
+            if (cs === 'Succeeded') succeeded++;
+            if (cs === 'Failed') failed++;
         }
 
         var el;
@@ -371,6 +433,7 @@ define(['emby-button'], function () {
             var autoChk = view.querySelector('#autoRefresh');
             var tokenDays = view.querySelector('#tokenDays');
             var uiLang = view.querySelector('#uiLanguage');
+            var taskPager = view.querySelector('#taskPager');
 
             if (refreshBtn) refreshBtn.addEventListener('click', function () { load(view); });
             if (pauseBtn) pauseBtn.addEventListener('click', function () { control(view, 'pause'); });
@@ -392,9 +455,20 @@ define(['emby-button'], function () {
                     lang = uiLang.value === 'zh' ? 'zh' : 'en';
                     localStorage.setItem('subz_status_lang', lang);
                     applyStaticTexts(view);
-                    load(view);
+                    if (lastStatusData) draw(view, lastStatusData);
+                    else load(view);
                 });
             }
+            if (taskPager) taskPager.addEventListener('click', function (e) {
+                var target = e.target || {};
+                if (target.id === 'taskPrevBtn' && taskPageIndex > 0) {
+                    taskPageIndex--;
+                    if (lastStatusData) draw(view, lastStatusData);
+                } else if (target.id === 'taskNextBtn') {
+                    taskPageIndex++;
+                    if (lastStatusData) draw(view, lastStatusData);
+                }
+            });
         }
 
         load(view);

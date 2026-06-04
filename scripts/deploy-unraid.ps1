@@ -4,7 +4,10 @@ param(
     [string]$RemoteUser = "",
     [string]$RemotePassword = "",
     [string]$RemoteHostKey = "",
+    [string]$BackupRemoteHost = "",
+    [int]$BackupRemotePort = 0,
     [string]$ConfigPath = "",
+    [string]$DeployInfoPath = "",
     [int]$ConnectTimeoutSec = 15,
     [int]$CopyTimeoutSec = 120,
     [int]$RemoteCommandTimeoutSec = 60,
@@ -14,9 +17,143 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
+$explicitRemoteHost = $PSBoundParameters.ContainsKey("RemoteHost")
+$explicitRemotePort = $PSBoundParameters.ContainsKey("RemotePort")
+$explicitRemoteUser = $PSBoundParameters.ContainsKey("RemoteUser")
+$explicitRemotePassword = $PSBoundParameters.ContainsKey("RemotePassword")
+$explicitRemoteHostKey = $PSBoundParameters.ContainsKey("RemoteHostKey")
 
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
     $ConfigPath = Join-Path $root "tmp\remote.unraid.json"
+}
+
+if ([string]::IsNullOrWhiteSpace($DeployInfoPath)) {
+    $DeployInfoPath = Join-Path (Split-Path -Parent $root) "deploy_info.md"
+}
+
+function ConvertFrom-MarkdownCell {
+    param([string]$Value)
+
+    return (($Value.Trim()) -replace '^`|`$', '').Trim()
+}
+
+function Read-MarkdownTables {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $rows = @()
+    $headers = $null
+    foreach ($line in Get-Content $Path) {
+        if (-not $line.Trim().StartsWith("|")) {
+            $headers = $null
+            continue
+        }
+
+        $cells = $line.Trim().Trim("|") -split "\|" | ForEach-Object { ConvertFrom-MarkdownCell $_ }
+        if ($cells.Count -eq 0) { continue }
+        $isSeparator = $true
+        foreach ($cell in $cells) {
+            if ($cell -notmatch '^:?-{2,}:?$') {
+                $isSeparator = $false
+                break
+            }
+        }
+        if ($isSeparator) { continue }
+
+        $looksLikeHeader = $cells -contains "Name" -or $cells -contains "Host" -or $cells -contains "Username" -or $cells -contains "Fingerprint"
+        if ($looksLikeHeader) {
+            $headers = $cells
+            continue
+        }
+
+        if ($null -eq $headers -or $headers.Count -ne $cells.Count) { continue }
+
+        $row = [ordered]@{}
+        for ($i = 0; $i -lt $headers.Count; $i++) {
+            $row[$headers[$i]] = $cells[$i]
+        }
+        $rows += [pscustomobject]$row
+    }
+
+    return $rows
+}
+
+function Get-PropertyValue {
+    param(
+        [Parameter(Mandatory = $true)]$Object,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) { return "" }
+    return [string]$property.Value
+}
+
+function Import-DeployInfo {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path $Path)) { return }
+
+    $rows = Read-MarkdownTables -Path $Path
+    $connectionRows = @($rows | Where-Object {
+        -not [string]::IsNullOrWhiteSpace((Get-PropertyValue $_ "Host")) -and
+        -not [string]::IsNullOrWhiteSpace((Get-PropertyValue $_ "Port")) -and
+        -not [string]::IsNullOrWhiteSpace((Get-PropertyValue $_ "Username")) -and
+        -not [string]::IsNullOrWhiteSpace((Get-PropertyValue $_ "Password"))
+    })
+
+    $backupRow = $connectionRows | Where-Object {
+        (-not [string]::IsNullOrWhiteSpace($script:BackupRemoteHost) -and (Get-PropertyValue $_ "Host") -eq $script:BackupRemoteHost) -or
+        ($script:BackupRemotePort -gt 0 -and (Get-PropertyValue $_ "Port") -eq [string]$script:BackupRemotePort) -or
+        (Get-PropertyValue $_ "Name") -match "backup|备用"
+    } | Select-Object -First 1
+
+    if (-not $backupRow) {
+        $backupRow = $connectionRows | Select-Object -First 1
+    }
+
+    if ($backupRow) {
+        if (-not $script:explicitRemoteHost) { $script:RemoteHost = Get-PropertyValue $backupRow "Host" }
+        if (-not $script:explicitRemotePort) { $script:RemotePort = [int](Get-PropertyValue $backupRow "Port") }
+        if (-not $script:explicitRemoteUser) { $script:RemoteUser = Get-PropertyValue $backupRow "Username" }
+        if (-not $script:explicitRemotePassword) { $script:RemotePassword = Get-PropertyValue $backupRow "Password" }
+    }
+
+    $targetRow = $connectionRows | Where-Object {
+        (Get-PropertyValue $_ "Host") -eq $script:RemoteHost -and
+        (Get-PropertyValue $_ "Port") -eq [string]$script:RemotePort
+    } | Select-Object -First 1
+
+    if ($targetRow) {
+        if (-not $script:explicitRemoteUser -and [string]::IsNullOrWhiteSpace($script:RemoteUser)) { $script:RemoteUser = Get-PropertyValue $targetRow "Username" }
+        if (-not $script:explicitRemotePassword -and [string]::IsNullOrWhiteSpace($script:RemotePassword)) { $script:RemotePassword = Get-PropertyValue $targetRow "Password" }
+    }
+
+    $hostKeyRow = $rows | Where-Object {
+        $hostValue = Get-PropertyValue $_ "Host"
+        -not [string]::IsNullOrWhiteSpace((Get-PropertyValue $_ "Fingerprint")) -and
+        ($hostValue -eq $script:RemoteHost -or
+            $hostValue -eq $script:BackupRemoteHost -or
+            $hostValue -like "*$($script:RemoteHost)*" -or
+            $hostValue -like "*$($script:BackupRemoteHost)*")
+    } | Select-Object -First 1
+
+    if (-not $hostKeyRow) {
+        $hostKeyRow = $rows | Where-Object {
+            -not [string]::IsNullOrWhiteSpace((Get-PropertyValue $_ "Fingerprint")) -and
+            (Get-PropertyValue $_ "Name") -match "^Unraid$" -and
+            (Get-PropertyValue $_ "Type") -eq "ssh-ed25519"
+        } | Select-Object -First 1
+    }
+
+    if ($hostKeyRow -and -not $script:explicitRemoteHostKey -and [string]::IsNullOrWhiteSpace($script:RemoteHostKey)) {
+        $fingerprint = Get-PropertyValue $hostKeyRow "Fingerprint"
+        $match = [regex]::Match($fingerprint, 'SHA256:[A-Za-z0-9+/=]+')
+        if ($match.Success) {
+            $script:RemoteHostKey = $match.Value
+        } else {
+            $script:RemoteHostKey = $fingerprint
+        }
+    }
 }
 
 if (Test-Path $ConfigPath) {
@@ -27,19 +164,34 @@ if (Test-Path $ConfigPath) {
         if ([string]::IsNullOrWhiteSpace($RemoteUser)) { $RemoteUser = [string]$remoteConfig.unraid.username }
         if ([string]::IsNullOrWhiteSpace($RemotePassword)) { $RemotePassword = [string]$remoteConfig.unraid.password }
         if ([string]::IsNullOrWhiteSpace($RemoteHostKey)) { $RemoteHostKey = [string]$remoteConfig.unraid.hostKey }
+        if (-not [string]::IsNullOrWhiteSpace([string]$remoteConfig.unraid.backupHost)) { $BackupRemoteHost = [string]$remoteConfig.unraid.backupHost }
+        if ([int]$remoteConfig.unraid.backupPort -gt 0) { $BackupRemotePort = [int]$remoteConfig.unraid.backupPort }
     }
 }
 
-if ([string]::IsNullOrWhiteSpace($RemoteHost)) { $RemoteHost = "sanding.life" }
-if ($RemotePort -le 0) { $RemotePort = 55522 }
+Import-DeployInfo -Path $DeployInfoPath
+
+if (-not $explicitRemoteHost -and -not [string]::IsNullOrWhiteSpace($BackupRemoteHost)) { $RemoteHost = $BackupRemoteHost }
+if (-not $explicitRemotePort -and $BackupRemotePort -gt 0) { $RemotePort = $BackupRemotePort }
+Import-DeployInfo -Path $DeployInfoPath
+
+if ([string]::IsNullOrWhiteSpace($RemoteHost)) {
+    throw "Remote host not configured. Provide -RemoteHost or add a connection row to the local deploy_info.md file."
+}
+if ($RemotePort -le 0) {
+    throw "Remote port not configured. Provide -RemotePort or add a connection row to the local deploy_info.md file."
+}
 if ([string]::IsNullOrWhiteSpace($RemoteUser)) { $RemoteUser = "root" }
+
+Write-Host "Deploy target: ${RemoteHost}:${RemotePort} as ${RemoteUser}" -ForegroundColor DarkCyan
+Write-Host "Credential source: password=$(-not [string]::IsNullOrWhiteSpace($RemotePassword)); hostKey=$(-not [string]::IsNullOrWhiteSpace($RemoteHostKey))" -ForegroundColor DarkCyan
 
 $sshTarget = "$RemoteUser@$RemoteHost"
 $sshpass = Get-Command sshpass -ErrorAction SilentlyContinue
-$useSshpass = -not [string]::IsNullOrWhiteSpace($RemotePassword) -and $null -ne $sshpass
 $plinkCmd = Get-Command plink -ErrorAction SilentlyContinue
 $pscpCmd = Get-Command pscp -ErrorAction SilentlyContinue
-$usePuttyPassword = -not $useSshpass -and -not [string]::IsNullOrWhiteSpace($RemotePassword) -and $null -ne $plinkCmd -and $null -ne $pscpCmd
+$usePuttyPassword = -not [string]::IsNullOrWhiteSpace($RemotePassword) -and $null -ne $plinkCmd -and $null -ne $pscpCmd
+$useSshpass = -not $usePuttyPassword -and -not [string]::IsNullOrWhiteSpace($RemotePassword) -and $null -ne $sshpass
 $hasPuttyHostKey = -not [string]::IsNullOrWhiteSpace($RemoteHostKey)
 
 function Invoke-ToolWithTimeout {
@@ -52,11 +204,13 @@ function Invoke-ToolWithTimeout {
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $FilePath
-    $psi.Arguments = ($Arguments -join " ")
     $psi.UseShellExecute = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
+    foreach ($arg in $Arguments) {
+        [void]$psi.ArgumentList.Add($arg)
+    }
 
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi

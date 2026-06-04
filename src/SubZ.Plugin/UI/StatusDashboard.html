@@ -40,7 +40,10 @@
             </div>
 
             <div class="verticalSection" style="margin-bottom:1.5em;">
-                <h2 class="sectionTitle">Task Status</h2>
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:.8em;margin-bottom:.5em;">
+                    <h2 id="taskStatusTitle" class="sectionTitle" style="margin:0;">Task Status</h2>
+                    <div id="taskPager" class="sz-task-pager"></div>
+                </div>
                 <div id="statusList" class="paperList" style="border:1px solid var(--cardBorderColor,#e5e7eb);border-radius:8px;overflow:hidden;">
                     <div style="padding:1.5em;text-align:center;opacity:.5;">No tasks</div>
                 </div>

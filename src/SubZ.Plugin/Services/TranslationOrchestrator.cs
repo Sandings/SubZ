@@ -7,11 +7,6 @@ using SubZ.Plugin.Configuration;
 
 namespace SubZ.Plugin.Services;
 
-public interface ITranslationJobDispatcher
-{
-    Task EnqueueAsync(IEnumerable<string> targets, CancellationToken cancellationToken);
-}
-
 public sealed class TranslationOrchestrator
 {
     private readonly PluginOptions _options;

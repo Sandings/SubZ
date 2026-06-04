@@ -10,7 +10,7 @@
 | --- | --- |
 | 插件项目路径 | `D:\Projects\SubZ` |
 | 目标平台 | Emby（Unraid Docker） |
-| 远程部署地址 | `sanding.life:55522` |
+| 远程部署地址 | 本地 `deploy_info.md` 中配置的 Unraid 连接 |
 | 插件部署位置 | `/mnt/user/DockerFile/emby/plugins/SubZ.Plugin.dll` |
 | 状态页默认地址 | `http://localhost:18123/subz-status.html` |
 | 主要模型提供方 | DeepSeek 兼容 LLM API |
