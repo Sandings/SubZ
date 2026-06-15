@@ -89,7 +89,7 @@ public sealed class TranslationExecutionEngine
             var rawLines = cues.Select(static c => c.Text).ToList();
 
             var translated = await translator.TranslateAsync(rawLines, options, cancellationToken, cues).ConfigureAwait(false);
-            var bilingualCues = BilingualSubtitleComposer.BuildBilingualCues(cues, translated.OutputLines);
+            var bilingualCues = BilingualSubtitleComposer.BuildBilingualCues(cues, translated.OutputLines, options.TranslationOnlyMode);
 
             var outputPath = BilingualSubtitleComposer.BuildOutputPath(videoFile, targetCode, options.OutputFormat);
             if (string.Equals(options.OutputFormat, "srt", StringComparison.OrdinalIgnoreCase))

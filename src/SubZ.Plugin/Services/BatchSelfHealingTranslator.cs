@@ -19,6 +19,12 @@ public enum TranslationPromptMode
     RetryUnchanged = 1
 }
 
+public sealed class GlossaryEntry
+{
+    public string Original { get; set; } = string.Empty;
+    public string Translated { get; set; } = string.Empty;
+}
+
 public sealed class TranslationBatchRequest
 {
     public TranslationApiProfile Profile { get; set; } = new TranslationApiProfile();
@@ -27,6 +33,9 @@ public sealed class TranslationBatchRequest
     public bool EnableDebugLog { get; set; }
     public TranslationPromptMode PromptMode { get; set; } = TranslationPromptMode.Default;
     public string RetryReasonHint { get; set; } = string.Empty;
+    public IReadOnlyList<GlossaryEntry>? Glossary { get; set; }
+    public bool ExtractGlossary { get; set; }
+    public int GlossaryMaxEntries { get; set; } = 50;
 }
 
 public sealed class TranslationBatchResponse
@@ -35,6 +44,7 @@ public sealed class TranslationBatchResponse
     public int PromptTokens { get; set; }
     public int CompletionTokens { get; set; }
     public int TotalTokens { get; set; }
+    public IReadOnlyList<GlossaryEntry>? ExtractedGlossary { get; set; }
 }
 
 public sealed class BatchSelfHealingTranslationResult
@@ -86,11 +96,15 @@ public sealed class BatchSelfHealingTranslator
         var profile = _profileResolver.ResolveActiveProfile(options);
         var retryPolicy = new TranslationRetryPolicy(profile.RetryCount);
         var batchSize = Math.Max(1, profile.BatchSize);
-        var maxParallel = Math.Max(1, profile.ParallelRequests);
         var batches = Split(sourceLines, batchSize);
         result.BatchCount = batches.Count;
 
         var outputs = new string[sourceLines.Count];
+        var enableGlossary = options.EnableNameGlossary;
+        var maxEntries = Math.Max(1, options.GlossaryMaxEntries);
+        var maxParallel = enableGlossary ? 1 : Math.Max(1, profile.ParallelRequests);
+
+        var accumulatedGlossary = new List<GlossaryEntry>();
         var sharedLock = new object();
         var nextBatchIndex = -1;
         var workers = new List<Task>(Math.Min(maxParallel, batches.Count));
@@ -109,6 +123,14 @@ public sealed class BatchSelfHealingTranslator
                     }
 
                     var batch = batches[batchIndex];
+                    IReadOnlyList<GlossaryEntry>? currentGlossary;
+                    bool extract;
+                    lock (sharedLock)
+                    {
+                        currentGlossary = enableGlossary ? accumulatedGlossary.ToList() : null;
+                        extract = enableGlossary;
+                    }
+
                     InMemoryTranslationJobDispatcher.AppendRuntimeLog(
                         "Info",
                         $"Batch {batchIndex + 1}/{batches.Count}: size={batch.Count}");
@@ -123,6 +145,9 @@ public sealed class BatchSelfHealingTranslator
                         profile,
                         retryPolicy,
                         result,
+                        currentGlossary,
+                        extractGlossary: extract,
+                        maxEntries,
                         cancellationToken).ConfigureAwait(false);
 
                     for (var i = 0; i < work.RestoredLines.Count; i++)
@@ -143,6 +168,14 @@ public sealed class BatchSelfHealingTranslator
                         if (work.Warnings.Count > 0)
                         {
                             result.Warnings.AddRange(work.Warnings);
+                        }
+
+                        if (enableGlossary && work.ExtractedGlossary != null && work.ExtractedGlossary.Count > 0)
+                        {
+                            accumulatedGlossary = MergeGlossary(accumulatedGlossary, work.ExtractedGlossary, maxEntries);
+                            InMemoryTranslationJobDispatcher.AppendRuntimeLog(
+                                "Debug",
+                                $"Glossary updated ({accumulatedGlossary.Count}/{maxEntries}): {SerializeGlossary(accumulatedGlossary)}");
                         }
                     }
                 }
@@ -168,6 +201,9 @@ public sealed class BatchSelfHealingTranslator
         TranslationApiProfile profile,
         TranslationRetryPolicy retryPolicy,
         BatchSelfHealingTranslationResult totalResult,
+        IReadOnlyList<GlossaryEntry>? glossary,
+        bool extractGlossary,
+        int maxEntries,
         CancellationToken cancellationToken)
     {
         var protectedBatch = new List<ProtectedSubtitleText>(batch.Count);
@@ -196,13 +232,17 @@ public sealed class BatchSelfHealingTranslator
                 TargetLanguage = options.GetTargetLanguageCode(),
                 Inputs = AddLineMarkers(payload),
                 EnableDebugLog = options.EnableDebugLog,
-                PromptMode = TranslationPromptMode.Default
+                PromptMode = TranslationPromptMode.Default,
+                Glossary = glossary,
+                ExtractGlossary = extractGlossary,
+                GlossaryMaxEntries = maxEntries
             }, ct),
             IsRetryable,
             cancellationToken).ConfigureAwait(false);
 
         var work = new BatchWorkResult();
         AddUsage(work, translatedResponse);
+        work.ExtractedGlossary = translatedResponse.ExtractedGlossary;
         var alignedOutput = AlignOutputsByLineMarkers(translatedResponse.OutputLines, payload, out var structuralMismatchCount);
         if (structuralMismatchCount > 0)
         {
@@ -221,6 +261,8 @@ public sealed class BatchSelfHealingTranslator
             options,
             totalResult,
             retryPolicy,
+            glossary,
+            maxEntries,
             cancellationToken,
             work).ConfigureAwait(false);
 
@@ -244,6 +286,8 @@ public sealed class BatchSelfHealingTranslator
         PluginOptions options,
         BatchSelfHealingTranslationResult totalResult,
         TranslationRetryPolicy retryPolicy,
+        IReadOnlyList<GlossaryEntry>? glossary,
+        int maxEntries,
         CancellationToken cancellationToken,
         BatchWorkResult work)
     {
@@ -308,7 +352,10 @@ public sealed class BatchSelfHealingTranslator
                         Inputs = segmentTaggedInputs,
                         EnableDebugLog = options.EnableDebugLog,
                         PromptMode = promptMode,
-                        RetryReasonHint = rangeReasonSummary
+                        RetryReasonHint = rangeReasonSummary,
+                        Glossary = glossary,
+                        ExtractGlossary = false,
+                        GlossaryMaxEntries = maxEntries
                     }, ct),
                     IsRetryable,
                     cancellationToken).ConfigureAwait(false);
@@ -652,6 +699,131 @@ public sealed class BatchSelfHealingTranslator
         return output;
     }
 
+    private const string GlossaryMarker = "---SUBZ_GLOSSARY---";
+
+    internal static bool TryParseGlossary(string content, int maxEntries, out string cleanedContent, out IReadOnlyList<GlossaryEntry> entries)
+    {
+        entries = Array.Empty<GlossaryEntry>();
+        cleanedContent = content ?? string.Empty;
+
+        var markerIndex = content?.IndexOf(GlossaryMarker, StringComparison.Ordinal) ?? -1;
+        if (markerIndex < 0)
+        {
+            return false;
+        }
+
+        cleanedContent = content!.Substring(0, markerIndex).TrimEnd();
+        var glossarySection = content.Substring(markerIndex + GlossaryMarker.Length);
+
+        var result = new List<GlossaryEntry>();
+        var lines = glossarySection.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+        foreach (var rawLine in lines)
+        {
+            if (result.Count >= maxEntries) break;
+
+            var line = rawLine.Trim();
+            if (string.IsNullOrWhiteSpace(line)) continue;
+
+            var colonIndex = line.IndexOf(':');
+            if (colonIndex < 0) continue;
+
+            var original = line.Substring(0, colonIndex).Trim();
+            var translated = line.Substring(colonIndex + 1).Trim();
+
+            if (string.IsNullOrWhiteSpace(original) || string.IsNullOrWhiteSpace(translated)) continue;
+
+            result.Add(new GlossaryEntry { Original = original, Translated = translated });
+        }
+
+        entries = result;
+        return result.Count > 0;
+    }
+
+    internal static List<GlossaryEntry> MergeGlossary(
+        List<GlossaryEntry> accumulated,
+        IReadOnlyList<GlossaryEntry> extracted,
+        int maxEntries)
+    {
+        if (extracted == null || extracted.Count == 0)
+        {
+            return accumulated;
+        }
+
+        var merged = new List<GlossaryEntry>(accumulated);
+        foreach (var entry in extracted)
+        {
+            var key = entry.Original ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(key)) continue;
+
+            if (!merged.Any(e => string.Equals(e.Original, key, StringComparison.OrdinalIgnoreCase)))
+            {
+                merged.Add(entry);
+            }
+        }
+
+        while (merged.Count > maxEntries)
+        {
+            merged.RemoveAt(0); // FIFO: remove oldest entries first
+        }
+
+        return merged;
+    }
+
+    internal static string BuildGlossarySection(IReadOnlyList<GlossaryEntry>? glossary)
+    {
+        if (glossary == null || glossary.Count == 0) return string.Empty;
+
+        var lines = new List<string>();
+        foreach (var entry in glossary)
+        {
+            if (!string.IsNullOrWhiteSpace(entry.Original) && !string.IsNullOrWhiteSpace(entry.Translated))
+            {
+                lines.Add($"{entry.Original} → {entry.Translated}");
+            }
+        }
+
+        return lines.Count > 0 ? string.Join("\n", lines) : string.Empty;
+    }
+
+    internal static string SerializeGlossary(IReadOnlyList<GlossaryEntry> glossary)
+    {
+        if (glossary == null || glossary.Count == 0) return "[]";
+
+        var items = new List<string>(glossary.Count);
+        foreach (var entry in glossary)
+        {
+            var original = JsonEscape(entry.Original ?? string.Empty);
+            var translated = JsonEscape(entry.Translated ?? string.Empty);
+            items.Add($"{{\"o\":\"{original}\",\"t\":\"{translated}\"}}");
+        }
+
+        return $"[{string.Join(",", items)}]";
+    }
+
+    private static string JsonEscape(string value)
+    {
+        if (string.IsNullOrEmpty(value)) return string.Empty;
+
+        var sb = new System.Text.StringBuilder(value.Length + 4);
+        foreach (var ch in value)
+        {
+            switch (ch)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (ch < 0x20) sb.Append($"\\u{(int)ch:X4}");
+                    else sb.Append(ch);
+                    break;
+            }
+        }
+
+        return sb.ToString();
+    }
+
     private sealed class BatchWorkResult
     {
         public List<string> RestoredLines { get; } = new List<string>();
@@ -660,6 +832,7 @@ public sealed class BatchSelfHealingTranslator
         public long PromptTokens { get; set; }
         public long CompletionTokens { get; set; }
         public long TotalTokens { get; set; }
+        public IReadOnlyList<GlossaryEntry>? ExtractedGlossary { get; set; }
     }
 
     private sealed class FailedLineItem

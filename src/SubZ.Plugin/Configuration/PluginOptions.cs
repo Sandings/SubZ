@@ -53,6 +53,10 @@ public sealed class PluginOptions : EditableOptionsBase
     [Description("仅在输出格式为 ASS 时生效。支持 &H00RRGGBB 或 #RRGGBB。 / Effective only for ASS output.")]
     public string AssPrimaryColor { get; set; } = "&H00FFFFFF";
 
+    [DisplayName("仅译文模式 / Translation-Only Mode")]
+    [Description("开启后输出仅包含译文，不包含原文。默认输出双语（原文+译文）。 / When enabled, output contains translated text only (no original text).")]
+    public bool TranslationOnlyMode { get; set; } = false;
+
     [DisplayName("API 提供方 / API Provider")]
     public string ApiProvider { get; set; } = "deepseek";
 
@@ -126,6 +130,14 @@ public sealed class PluginOptions : EditableOptionsBase
 
     [DisplayName("尾段重试次数 / Tail Retry Attempts")]
     public int TailRetryMaxAttempts { get; set; } = 2;
+
+    [DisplayName("专有名词翻译一致性 / Proper Noun Consistency")]
+    [Description("开启后改为串行翻译，逐批次累积专有名词翻译对照表。关闭则恢复并行且不注入对照表。 / When enabled, batches run sequentially and accumulate a proper noun glossary for consistent translation.")]
+    public bool EnableNameGlossary { get; set; } = false;
+
+    [DisplayName("术语表最大条目 / Glossary Max Entries")]
+    [Description("专有名词对照表最大条目数，超出按 FIFO 截断。 / Proper noun glossary max entries, FIFO truncation when exceeded.")]
+    public int GlossaryMaxEntries { get; set; } = 50;
 
     [DisplayName("优先非强制字幕轨 / Prefer Non-Forced Track")]
     public bool PreferNonForcedTrack { get; set; } = true;

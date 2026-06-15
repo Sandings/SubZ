@@ -181,7 +181,7 @@ public static class SubtitleSourceResolver
             " ",
             "-v", "error",
             "-select_streams", "s",
-            "-show_entries", "stream=index,codec_name:stream_disposition=default,forced,hearing_impaired:stream_tags=language",
+            "-show_entries", "stream=index,codec_name,language:stream_disposition=default,forced,hearing_impaired:stream_tags=language",
             "-of", "compact=p=0:nk=0",
             QuoteProcessArg(videoFile));
 
@@ -236,6 +236,7 @@ public static class SubtitleSourceResolver
                     case "codec_name":
                         codec = value;
                         break;
+                    case "language":
                     case "tag:language":
                     case "tags:language":
                         language = value;

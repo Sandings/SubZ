@@ -42,6 +42,13 @@ public sealed class OpenAICompatibleTranslationClient : ISubtitleTranslationClie
         var preferredThinking = BuildPreferredThinkingOption(request.Profile);
         var shouldTryThinkingDisabled = preferredThinking != null && (!hasCache || supportsThinkingParam);
 
+        var systemContent = BuildSystemContent(request);
+        var userContent = prompt;
+        if (request.ExtractGlossary)
+        {
+            userContent += BuildExtractGlossaryInstruction(request.GlossaryMaxEntries);
+        }
+
         var payloadObj = new ChatCompletionRequest
         {
             model = model,
@@ -49,8 +56,8 @@ public sealed class OpenAICompatibleTranslationClient : ISubtitleTranslationClie
             thinking = shouldTryThinkingDisabled ? preferredThinking : null,
             messages = new[]
             {
-                new ChatMessage { role = "system", content = "You are a professional subtitle translator." },
-                new ChatMessage { role = "user", content = prompt }
+                new ChatMessage { role = "system", content = systemContent },
+                new ChatMessage { role = "user", content = userContent }
             }
         };
 
@@ -87,9 +94,25 @@ public sealed class OpenAICompatibleTranslationClient : ISubtitleTranslationClie
                 debug).ConfigureAwait(false);
         }
 
-        var output = response?.choices != null && response.choices.Length > 0
+        var rawContent = response?.choices != null && response.choices.Length > 0
             ? response.choices[0]?.message?.content ?? string.Empty
             : string.Empty;
+
+        IReadOnlyList<GlossaryEntry>? extractedGlossary = null;
+        string output;
+        if (request.ExtractGlossary && !string.IsNullOrWhiteSpace(rawContent))
+        {
+            BatchSelfHealingTranslator.TryParseGlossary(
+                rawContent,
+                request.GlossaryMaxEntries,
+                out var cleanedOutput,
+                out extractedGlossary);
+            output = !string.IsNullOrWhiteSpace(cleanedOutput) ? cleanedOutput : rawContent;
+        }
+        else
+        {
+            output = rawContent;
+        }
 
         var lines = SplitOutput(output, sep, request.Inputs.Count, request.Inputs);
 
@@ -98,7 +121,8 @@ public sealed class OpenAICompatibleTranslationClient : ISubtitleTranslationClie
             OutputLines = lines,
             PromptTokens = response?.usage?.prompt_tokens ?? 0,
             CompletionTokens = response?.usage?.completion_tokens ?? 0,
-            TotalTokens = response?.usage?.total_tokens ?? 0
+            TotalTokens = response?.usage?.total_tokens ?? 0,
+            ExtractedGlossary = extractedGlossary
         };
     }
 
@@ -152,6 +176,32 @@ public sealed class OpenAICompatibleTranslationClient : ISubtitleTranslationClie
             || message.Contains("unrecognized")
             || message.Contains("extra inputs are not permitted")
             || message.Contains("additional properties are not allowed");
+    }
+
+    private static string BuildSystemContent(TranslationBatchRequest request)
+    {
+        var glossarySection = BatchSelfHealingTranslator.BuildGlossarySection(request.Glossary);
+        if (string.IsNullOrWhiteSpace(glossarySection))
+        {
+            return "You are a professional subtitle translator.";
+        }
+
+        return "You are a professional subtitle translator.\n"
+            + "Glossary of proper nouns (names, places, organizations, products, etc. - use these translations consistently):\n"
+            + glossarySection;
+    }
+
+    private static string BuildExtractGlossaryInstruction(int maxEntries)
+    {
+        var limit = Math.Max(1, maxEntries);
+        return "\n\n"
+            + $"Additionally, identify NEW proper nouns (person names, place names, organization names, product names, etc.) that appear in the subtitles above "
+            + $"and are NOT already listed in the glossary above. "
+            + $"Append them at the end of your response in this format:\n"
+            + $"---SUBZ_GLOSSARY---\n"
+            + $"Original Name: Translated Name\n"
+            + $"Limit to {limit} entries total. Only include proper nouns actually appearing in the subtitles.\n"
+            + $"If no new names found, omit the ---SUBZ_GLOSSARY--- section.";
     }
 
     private static double GetSafeTemperature(TranslationApiProfile profile)

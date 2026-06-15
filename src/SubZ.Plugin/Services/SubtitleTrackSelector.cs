@@ -81,12 +81,12 @@ public sealed class SubtitleTrackSelector
                 score += 140;
             }
             else if (!string.IsNullOrWhiteSpace(preferredShort) &&
-                     string.Equals(trackLanguage, preferredShort, StringComparison.OrdinalIgnoreCase))
+                string.Equals(trackLanguage, preferredShort, StringComparison.OrdinalIgnoreCase))
             {
                 score += 100;
             }
             else if (!string.IsNullOrWhiteSpace(preferredShort) &&
-                     trackLanguage.StartsWith(preferredShort + "-", StringComparison.OrdinalIgnoreCase))
+                trackLanguage.StartsWith(preferredShort, StringComparison.OrdinalIgnoreCase))
             {
                 score += 80;
             }

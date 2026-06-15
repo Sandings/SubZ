@@ -6,14 +6,26 @@ namespace SubZ.Plugin.Services;
 
 public static class BilingualSubtitleComposer
 {
-    public static List<SubtitleCue> BuildBilingualCues(IReadOnlyList<SubtitleCue> source, IReadOnlyList<string> translated)
+    public static List<SubtitleCue> BuildBilingualCues(
+        IReadOnlyList<SubtitleCue> source,
+        IReadOnlyList<string> translated,
+        bool translationOnly = false)
     {
         var cues = new List<SubtitleCue>(source.Count);
         for (var i = 0; i < source.Count; i++)
         {
-            var src = NormalizeSpaces(source[i].Text);
             var dst = NormalizeSpaces(i < translated.Count ? translated[i] : source[i].Text);
-            var merged = ReflowToTwoLines(src, dst);
+
+            string merged;
+            if (translationOnly)
+            {
+                merged = dst;
+            }
+            else
+            {
+                var src = NormalizeSpaces(source[i].Text);
+                merged = ReflowToTwoLines(src, dst);
+            }
 
             cues.Add(new SubtitleCue
             {
