@@ -187,7 +187,7 @@ public sealed class OpenAICompatibleTranslationClient : ISubtitleTranslationClie
         }
 
         return "You are a professional subtitle translator.\n"
-            + "Glossary of names and places (use these translations consistently):\n"
+            + "Glossary of proper nouns (names, places, organizations, products, etc. - use these translations consistently):\n"
             + glossarySection;
     }
 
@@ -195,12 +195,12 @@ public sealed class OpenAICompatibleTranslationClient : ISubtitleTranslationClie
     {
         var limit = Math.Max(1, maxEntries);
         return "\n\n"
-            + $"Additionally, identify NEW person names and place names that appear in the subtitles above "
+            + $"Additionally, identify NEW proper nouns (person names, place names, organization names, product names, etc.) that appear in the subtitles above "
             + $"and are NOT already listed in the glossary above. "
             + $"Append them at the end of your response in this format:\n"
             + $"---SUBZ_GLOSSARY---\n"
             + $"Original Name: Translated Name\n"
-            + $"Limit to {limit} entries total. Only include proper names actually appearing in the subtitles.\n"
+            + $"Limit to {limit} entries total. Only include proper nouns actually appearing in the subtitles.\n"
             + $"If no new names found, omit the ---SUBZ_GLOSSARY--- section.";
     }
 
